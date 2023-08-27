@@ -703,7 +703,7 @@ contract ShibbexDopaFarm is ReentrancyGuard, Pausable {
     }
 
     function notifyShexRewards() internal updateReward(address(0)) {
-        address _rewardToken = address(shex);
+        address _rewardsToken = address(shex);
         uint256 shexBalance = shex.balanceOf(address(this));
         uint256 reward = shexBalance.sub(claimedShexAmount);
 
