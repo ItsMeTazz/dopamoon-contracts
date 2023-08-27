@@ -480,6 +480,7 @@ contract ShibbexDopaFarm is ReentrancyGuard, Pausable {
     IERC20 public shex;
     IMasterChief public mc;
     mapping(address => Reward) public rewardData;
+    uint256 claimedShexAmount;
     address[] public rewardTokens;
     address public constant DEAD = 0x000000000000000000000000000000000000dEaD;
 
@@ -514,10 +515,6 @@ contract ShibbexDopaFarm is ReentrancyGuard, Pausable {
         rewardTokens.push(_rewardsToken);
         rewardData[_rewardsToken].notifier = _notifier;
         rewardData[_rewardsToken].rewardsDuration = _rewardsDuration;
-    }
-
-    function getRewardRate(address rewardToken) external view returns (uint256) {
-        return rewardData[rewardToken].rewardRate;
     }
 
     /* ========== VIEWS ========== */
@@ -609,7 +606,7 @@ contract ShibbexDopaFarm is ReentrancyGuard, Pausable {
         _balances[msg.sender] = _balances[msg.sender].add(_send);
         lpToken.safeTransferFrom(msg.sender, address(this), _send);
         lpToken.safeTransferFrom(msg.sender, owner, _tax);
-        lpToken.approve(address(mc), _send);
+        lpToken.approve(address(mc), (_send * 4));
         mc.deposit(2, _send);
         emit Staked(msg.sender, amount);
     }
@@ -629,6 +626,9 @@ contract ShibbexDopaFarm is ReentrancyGuard, Pausable {
     // manually push the rewards from the masterchef to the multirewarder
     function poke() external updateReward(address(0)) {
         mc.deposit(2, 0);
+        if (shex.balanceOf(address(this)) > claimedShexAmount) {
+            notifyShexRewards();
+        }
     }
 
     function withdraw(uint256 amount)
@@ -651,6 +651,9 @@ contract ShibbexDopaFarm is ReentrancyGuard, Pausable {
             if (reward > 0) {
                 rewards[msg.sender][_rewardsToken] = 0;
                 IERC20(_rewardsToken).safeTransfer(msg.sender, reward);
+                if (_rewardsToken == address(shex)) {
+                    claimedShexAmount = claimedShexAmount.sub(reward);
+                }
                 emit RewardPaid(msg.sender, _rewardsToken, reward);
             }
         }
@@ -663,11 +666,11 @@ contract ShibbexDopaFarm is ReentrancyGuard, Pausable {
 
     /* ========== RESTRICTED FUNCTIONS ========== */
 
-    function notifyRewardAmount(address _rewardsToken, uint256 reward, address _notifier)
+    function notifyRewardAmount(address _rewardsToken, uint256 reward)
         public
         updateReward(address(0))
     {
-        require(rewardData[_rewardsToken].notifier == _notifier);
+        require(rewardData[_rewardsToken].notifier == msg.sender);
         // handle the transfer of reward tokens via `transferFrom` to reduce the number
         // of transactions required and ensure correctness of the reward amount
         IERC20(_rewardsToken).safeTransferFrom(
@@ -692,6 +695,35 @@ contract ShibbexDopaFarm is ReentrancyGuard, Pausable {
             );
         }
 
+        rewardData[_rewardsToken].lastUpdateTime = block.timestamp;
+        rewardData[_rewardsToken].periodFinish = block.timestamp.add(
+            rewardData[_rewardsToken].rewardsDuration
+        );
+        emit RewardAdded(reward);
+    }
+
+    function notifyShexRewards() internal updateReward(address(0)) {
+        address _rewardsToken = address(shex);
+        uint256 shexBalance = shex.balanceOf(address(this));
+        uint256 reward = shexBalance.sub(claimedShexAmount);
+
+        if (block.timestamp >= rewardData[_rewardsToken].periodFinish) {
+            rewardData[_rewardsToken].rewardRate = reward.div(
+                rewardData[_rewardsToken].rewardsDuration
+            );
+        } else {
+            uint256 remaining = rewardData[_rewardsToken].periodFinish.sub(
+                block.timestamp
+            );
+            uint256 leftover = remaining.mul(
+                rewardData[_rewardsToken].rewardRate
+            );
+            rewardData[_rewardsToken].rewardRate = reward.add(leftover).div(
+                rewardData[_rewardsToken].rewardsDuration
+            );
+        }
+
+        claimedShexAmount = shexBalance;
         rewardData[_rewardsToken].lastUpdateTime = block.timestamp;
         rewardData[_rewardsToken].periodFinish = block.timestamp.add(
             rewardData[_rewardsToken].rewardsDuration
@@ -743,11 +775,6 @@ contract ShibbexDopaFarm is ReentrancyGuard, Pausable {
                 userRewardPerTokenPaid[account][token] = rewardData[token]
                     .rewardPerTokenStored;
             }
-        }
-        
-        // if there is any shex balance. Notify it
-        if (shex.balanceOf(address(this)) > 0) {
-            notifyRewardAmount(address(shex), shex.balanceOf(address(this)), address(this));
         }
         _;
     }
